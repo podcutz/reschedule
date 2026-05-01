@@ -965,6 +965,18 @@
 
   // Run detection immediately
   detectEnvironment();
+
+  // --- URL VALIDATION (RESCHEDULE ID) ---
+  const urlParams = new URLSearchParams(window.location.search);
+  const rescheduleId = urlParams.get('id');
+
+  if (!rescheduleId) {
+      // Wipe the screen and make it pitch black immediately
+      document.body.innerHTML = '';
+      document.body.style.backgroundColor = '#000000';
+      // Halt all further script execution (prevents Supabase and Calendar from loading)
+      throw new Error("Missing reschedule ID in URL.");
+  }
   
   // Initialize calendar immediately since the form is removed
   document.addEventListener('DOMContentLoaded', () => {
@@ -1399,12 +1411,10 @@
           const monthNames = ["Jan", "Feb", "March", "April", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec"];
           const formattedDate = `${d}${suffix} ${monthNames[m - 1]}, ${y}`;
 
-          // Create a temporary ID to fulfill the webhook requirement
-          const temporaryMeetingId = crypto.randomUUID ? crypto.randomUUID() : 'pending-backend-id';
-
+          // Pass the exact reschedule ID from the URL directly to your webhook
           const payload = {
               target_profile_id: TARGET_PROFILE_ID,
-              meeting_id: temporaryMeetingId,
+              meeting_id: rescheduleId, // Uses the dynamic ID parsed from the URL
               guest_email: emailInput,
               form_data: allFormAnswers, // Injects the full questionnaire data (with combined Name) into n8n
               booking_details: {
