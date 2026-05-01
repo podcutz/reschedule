@@ -1,0 +1,1441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+<title>Welcome To Podcutz! </title>
+<link rel="icon" type="image/png" href="https://res.cloudinary.com/dobnqmfsg/image/upload/v1771827572/Untitled_design-removebg-preview_bj0uah.png">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  /* ------------------------------------------- */
+  /* DYNAMIC ENVIRONMENT OVERRIDES               */
+  /* ------------------------------------------- */
+
+  /* 1. If we detect an IN-APP BROWSER */
+  body.is-in-app-browser {
+      /* Force strict height calculation to fight WebView bugs */
+      height: 100vh !important; 
+      position: fixed !important; 
+      overflow: hidden !important;
+  }
+
+  body.is-in-app-browser .step {
+      /* In-app browsers often ignore 'env()', so we force hard pixel fallbacks */
+      padding-top: 80px !important; 
+      padding-bottom: 120px !important;
+  }
+
+  /* 2. If we detect specifically LINKEDIN */
+  body.is-linkedin .nav-pill {
+      /* LinkedIn's bottom bar is unusually tall, push our nav up higher */
+      bottom: 60px !important; 
+  }
+
+  /* 3. If we detect standard MOBILE (but NOT an in-app browser) */
+  body.is-mobile:not(.is-in-app-browser) .step {
+      /* We can safely use advanced dynamic viewports here */
+      height: 100dvh !important; 
+  }
+
+  :root {
+    --bg-color: #ffffff;
+    --text-color: #000000;
+    --accent-color: #032330;
+    --input-border: rgba(0, 0, 0, 0.3);
+    --font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+
+  body, html {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: var(--font-family);
+    overflow: hidden; /* Hide scrollbars for the full-screen effect */
+    position: fixed; /* Locks the viewport completely in WebViews to prevent bounce/pull-to-refresh */
+    overscroll-behavior-y: none;
+    -webkit-text-size-adjust: none !important; /* Forces total disable of inflation algorithms */
+    text-size-adjust: none !important;
+  }
+
+  /* The main container */
+  #form-container {
+    height: 100%;
+    width: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  /* Each question takes up exactly one full screen securely via absolute coordinates */
+  .step {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    opacity: 0;
+    visibility: hidden;
+    overflow-x: hidden; /* Hard lock to prevent anything spilling right of the screen */
+    overflow-y: auto; /* Enables scrolling for tall questions */
+    -webkit-overflow-scrolling: touch; /* CRUCIAL: smooth native scrolling in iOS WebViews */
+    padding-top: calc(50px + env(safe-area-inset-top)); /* Respects notches on mobile devices */
+    padding-bottom: calc(20px + env(safe-area-inset-bottom)); /* Respects home bars */
+    box-sizing: border-box;
+    /* Transition removed to prevent snapping; animations handle movement strictly */
+  }
+
+  /* Dark bluish scrollbar for tall questions */
+  .step::-webkit-scrollbar {
+    width: 6px;
+  }
+  .step::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .step::-webkit-scrollbar-thumb {
+    background: rgba(3, 35, 48, 0.4); /* Matches your accent color palette */
+    border-radius: 10px;
+  }
+  .step::-webkit-scrollbar-thumb:hover {
+    background: rgba(3, 35, 48, 0.7);
+  }
+
+  /* Class to slide the old question up and out */
+  .step.exit-up {
+    animation: slideOutUp 0.5s cubic-bezier(0.5, 0, 0.8, 0.2) forwards; /* Smoother, less exponential acceleration */
+    z-index: 5;
+  }
+
+  /* Class to slide the old question down and out */
+  .step.exit-down {
+    animation: slideOutDown 0.5s cubic-bezier(0.5, 0, 0.8, 0.2) forwards; /* Smoother, less exponential acceleration */
+    z-index: 5;
+  }
+
+  @keyframes slideOutUp {
+    0% {
+      opacity: 1;
+      transform: translateY(0);
+      visibility: visible;
+    }
+    70% {
+      opacity: 0.3; /* Fades to zero non-linearly right as it reaches the screen border */
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-100vh); /* crosses the top border completely */
+      visibility: hidden;
+    }
+  }
+
+  @keyframes slideOutDown {
+    0% {
+      opacity: 1;
+      transform: translateY(0);
+      visibility: visible;
+    }
+    70% {
+      opacity: 0.3; /* Fades to zero non-linearly right as it reaches the screen border */
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(100vh); /* crosses the bottom border completely */
+      visibility: hidden;
+    }
+  }
+
+  .step.active {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    z-index: 10;
+    animation: blurFadeOut 0.8s ease forwards;
+  }
+
+  @keyframes blurFadeOut {
+    0% {
+      filter: blur(4px); /* Slightly reduced blur */
+    }
+    100% {
+      filter: blur(0px);
+    }
+  }
+
+  
+  /* Set initial state for the line-by-line elements */
+  .step .step-content > * {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  /* Keep children fully visible while the parent container fades and slides out */
+  .step.exit-up .step-content > *,
+  .step.exit-down .step-content > * {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Trigger the drift-up animation when the step becomes active (forward) */
+  .step.active:not(.reverse) .step-content > * {
+    animation: fadeUp 0.6s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+  }
+
+  /* Trigger the drift-down animation when the step becomes active (backward) */
+  .step.active.reverse .step-content > * {
+    animation: fadeDown 0.6s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+  }
+
+  /* Stagger the delays so they appear line-by-line quickly */
+  .step.active .step-content > *:nth-child(1) { animation-delay: 0.1s; }
+  .step.active .step-content > *:nth-child(2) { animation-delay: 0.2s; }
+  .step.active .step-content > *:nth-child(3) { animation-delay: 0.3s; }
+  .step.active .step-content > *:nth-child(4) { animation-delay: 0.4s; }
+  .step.active .step-content > *:nth-child(5) { animation-delay: 0.5s; }
+  .step.active .step-content > *:nth-child(6) { animation-delay: 0.6s; }
+
+  @keyframes fadeUp {
+    0% {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fadeDown {
+    0% {
+      opacity: 0;
+      transform: translateY(-20px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .step-content {
+    width: 100%;
+    max-width: 900px;
+    padding: 40px;
+    margin: auto 0; /* Auto margin centers vertically, preventing top cutoff on overflow */
+    flex-shrink: 0; /* Prevents content squishing on small screens */
+    box-sizing: border-box;
+  }
+
+  .question-header {
+    font-size: 20px;
+    font-weight: 400;
+    line-height: 1.4;
+    margin-bottom: 10px;
+    display: flex;
+  }
+
+  
+  .question-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--accent-color);
+    color: var(--bg-color);
+    min-width: 18px;
+    height: 20px;
+    border-radius: 7px 4px 7px 4px;
+    margin-right: 12px;
+    font-size: 11px;
+    font-weight: bold;
+    flex-shrink: 0;
+    margin-top: 4px;
+    margin-bottom: 6px;
+    padding: 0 2px;
+  }
+
+  /* Fix for Browser Autofill blue background issue (Enhanced for In-App WebViews like Slack) */
+  .tf-input:-webkit-autofill,
+  .tf-input:-webkit-autofill:hover, 
+  .tf-input:-webkit-autofill:focus, 
+  .tf-input:-webkit-autofill:active,
+  .custom-dropdown-input:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0 1000px var(--bg-color) inset !important;
+    -webkit-text-fill-color: var(--accent-color) !important;
+    background-clip: content-box !important;
+    border-radius: 0;
+    transition: background-color 5000s ease-in-out 0s;
+  }
+
+  .description {
+    font-size: 18px;
+    color: rgba(0, 0, 0, 0.6);
+    margin-left: 35px;
+    margin-bottom: 30px;
+  }
+
+  .input-wrapper {
+    margin-left: 35px;
+    margin-bottom: 30px;
+    width: 100%;
+    max-width: 750px;
+  }
+
+  .input-label {
+    display: block;
+    font-size: 18px;
+    color: var(--text-color);
+    margin-bottom: 8px;
+  }
+
+  
+  .tf-input {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box; /* Forces padding to stay within screen limits */
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--input-border);
+    color: var(--accent-color);
+    font-size: 24px;
+    padding: 10px 0;
+    outline: none;
+    -webkit-appearance: none; /* Removes mobile default styles causing black lines */
+    border-radius: 0; /* Prevents edge artifacts on mobile browsers */
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .tf-input:focus {
+    outline: none !important;
+    border-bottom: 1px solid var(--input-border);
+    box-shadow: 0 1px 0 0 var(--accent-color);
+  }
+
+  .tf-input::placeholder {
+    color: rgba(0, 0, 0, 0.3);
+  }
+
+  .button-wrapper {
+    margin-left: 35px;
+    margin-top: 30px;
+    display: flex;
+    align-items: center;
+  }
+
+  .btn-submit {
+    background-color: var(--accent-color);
+    color: rgba(255, 255, 255, 0.85);
+    border: none;
+    padding: 10px 20px;
+    font-size: 16px;
+    border-radius: 12px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.2s ease, transform 0.2s ease, color 0.2s ease;
+  }
+
+  .btn-submit:hover {
+    background-color: #021720;
+    transform: scale(1.02);
+    color: #ffffff;
+  }
+
+  .hint {
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.5);
+    margin-left: 15px;
+  }
+
+  /* Multiple Choice Options */
+  .choice-container {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-left: 35px;
+    margin-bottom: 30px;
+    max-width: 350px;
+  }
+
+  .choice-label {
+    display: flex;
+    align-items: center;
+    background-color: rgba(3, 35, 48, 0.03); 
+    border: 1px solid rgba(3, 35, 48, 0.15); 
+    border-radius: 25px; 
+    padding: 10px 20px; 
+    cursor: pointer;
+    transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    font-size: 18px; 
+    color: var(--accent-color);
+  }
+
+  .choice-label:hover {
+    transform: scale(1.01);
+    background-color: rgba(3, 35, 48, 0.08); 
+  }
+
+  .choice-label input[type="radio"] {
+    opacity: 0;
+    position: absolute;
+    width: 0;
+    height: 0;
+  }
+
+  .choice-letter {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px; 
+    height: 20px; 
+    border: 1px solid var(--accent-color);
+    border-radius: 50%;
+    margin-right: 12px;
+    font-size: 12px; 
+    font-weight: bold;
+    color: var(--accent-color);
+    background-color: #fff;
+    transition: all 0.2s ease;
+  }
+
+  .choice-label:has(input[type="radio"]:checked) {
+    background-color: #ffffff;
+    border-color: var(--accent-color);
+    box-shadow: 0 2px 8px rgba(3, 35, 48, 0.1);
+  }
+  
+  .choice-label:has(input[type="radio"]:checked) .choice-letter {
+    background-color: var(--accent-color);
+    color: #fff;
+  }
+
+  /* Q5 Scale Container */
+  .scale-container {
+    display: flex;
+    gap: 12px;
+    margin-left: 35px;
+    margin-bottom: 30px;
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .scale-label {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    background-color: rgba(3, 35, 48, 0.03);
+    border: 1px solid rgba(3, 35, 48, 0.15);
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 18px;
+    color: var(--accent-color);
+    transition: all 0.2s ease;
+  }
+  .scale-label:hover {
+    transform: scale(1.05);
+    background-color: rgba(3, 35, 48, 0.08);
+  }
+  .scale-label input[type="radio"] {
+    opacity: 0;
+    position: absolute;
+    width: 0;
+    height: 0;
+  }
+  .scale-label:has(input[type="radio"]:checked) {
+    background-color: var(--accent-color);
+    color: #fff;
+    border-color: var(--accent-color);
+  }
+
+  /* Q6 Yes/No Descriptive */
+  .statement-list {
+    margin-left: 35px;
+    margin-bottom: 20px;
+    font-size: 20px; /* Matches the question header text size */
+    color: var(--text-color);
+    max-width: 700px;
+    line-height: 1.5;
+  }
+  .statement-list p { margin: 8px 0; }
+
+  /* Q8 Custom Dropdown */
+  .custom-dropdown-container {
+    margin-left: 35px;
+    margin-bottom: 30px;
+    width: 100%;
+    max-width: 750px;
+    position: relative;
+    z-index: 100;
+  }
+  .custom-dropdown-header {
+    display: flex;
+    align-items: center;
+    position: relative;
+  }
+  .custom-dropdown-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--input-border);
+    color: var(--accent-color);
+    font-size: 24px;
+    padding: 10px 0;
+    outline: none;
+    -webkit-appearance: none; /* Removes mobile default styles causing black lines */
+    border-radius: 0; /* Prevents edge artifacts on mobile browsers */
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+  .custom-dropdown-input:focus {
+    outline: none !important;
+    border-bottom: 1px solid var(--input-border);
+    box-shadow: 0 1px 0 0 var(--accent-color);
+  }
+  .custom-dropdown-input::placeholder {
+    color: rgba(0, 0, 0, 0.3);
+  }
+  .custom-dropdown-icon {
+    position: absolute;
+    right: 0;
+    bottom: 8px;
+    z-index: 10; /* Ensures the icon is above the input text */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-color);
+    background-color: rgba(255, 255, 255, 0.85); /* Clean, low-opacity white circle */
+    border-radius: 50%;
+    width: 34px;
+    height: 34px;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); /* Subtle shadow for depth */
+  }
+  .custom-dropdown-icon svg {
+    width: 20px;
+    height: 20px;
+    transform: rotate(90deg); /* Rotate the inner SVG arrow instead! */
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .custom-dropdown-icon.open svg {
+    transform: rotate(0deg); /* Spins smoothly to point down */
+  }
+  .custom-dropdown-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background-color: var(--bg-color);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    border-radius: 12px;
+    margin-top: 8px;
+    padding: 15px;
+    max-height: 40vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    border: 1px solid rgba(3, 35, 48, 0.1);
+  }
+  .custom-dropdown-list::-webkit-scrollbar {
+    width: 8px;
+  }
+  .custom-dropdown-list::-webkit-scrollbar-track {
+    background: rgba(3, 35, 48, 0.05);
+    border-radius: 10px;
+    margin: 15px 0;
+    border-right: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .custom-dropdown-list::-webkit-scrollbar-thumb {
+    background: var(--accent-color);
+    border-radius: 10px;
+    border-right: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    background-color: rgba(3, 35, 48, 0.03);
+    border: 1px solid rgba(3, 35, 48, 0.15);
+    border-radius: 25px;
+    padding: 14px 20px;
+    font-size: 18px;
+    color: var(--accent-color);
+    cursor: pointer;
+    transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+  }
+  .dropdown-item:hover {
+    transform: scale(1.01);
+    background-color: #ffffff;
+    border-color: rgba(3, 35, 48, 0.2);
+    box-shadow: 0 2px 8px rgba(3, 35, 48, 0.05);
+  }
+
+  /* Progress Bar */
+  .progress-bar-wrapper {
+    position: fixed;
+    top: calc(3px + env(safe-area-inset-top)); /* Safe area for notches in WebViews */
+    left: 4px;
+    right: 4px;
+    height: 4px;
+    background-color: rgba(3, 35, 48, 0.15);
+    border-radius: 4px;
+    z-index: 1000;
+    pointer-events: none;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background-color: var(--accent-color);
+    border-radius: 4px;
+    width: 0%;
+    transition: width 0.4s ease;
+  }
+
+  /* Navigation Pill (Bottom Right) */
+  .nav-pill {
+    position: fixed;
+    bottom: calc(30px + env(safe-area-inset-bottom)); /* Safe area for iOS home bar */
+    right: 35px;
+    display: flex;
+    background-color: var(--accent-color);
+    border-radius: 8px;
+    overflow: hidden;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  
+  .nav-btn {
+    background-color: transparent;
+    border: none;
+    color: #ffffff;
+    padding: 10px 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease, opacity 0.2s ease;
+  }
+  
+  .nav-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.15);
+  }
+  
+  .nav-btn.up {
+    border-right: 2px solid var(--bg-color); /* Creates the clean separation line */
+  }
+  
+  .nav-btn svg {
+    width: 24px;
+    height: 24px;
+  }
+  
+  
+  .nav-btn:disabled {
+    color: #888888;
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  /* Booking Calendar Custom Styles */
+  .booking-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .booking-day { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; cursor: pointer; border: 1px solid transparent; transition: all 0.2s; border-radius: 6px; }
+  .booking-day:hover:not(.empty) { background: rgba(3, 35, 48, 0.08); }
+  .booking-day.selected { background: var(--accent-color); color: var(--bg-color); font-weight: bold; }
+  .booking-day.empty { pointer-events: none; }
+  .booking-day.disabled { opacity: 0.2; cursor: not-allowed; pointer-events: none; }
+
+  .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(3, 35, 48, 0.2); border-radius: 10px; }
+  
+  .mobile-break {
+      display: none;
+  }
+
+  #timeSlotsContainer {
+      transition: height 0.5s ease-in-out, opacity 0.5s ease-in-out, max-width 0.5s ease-in-out, margin 0.5s ease-in-out;
+      max-width: 0;
+      height: 0; /* Explicit height fixes transition jitter */
+      opacity: 0;
+      overflow: hidden;
+  }
+  #timeSlotsContainer.open {
+      max-width: 400px;
+      height: 400px; /* Explicit desktop height */
+      opacity: 1;
+      margin-left: 2rem;
+  }
+
+  /* --- Mobile Layout Optimizations --- */
+  @media (max-width: 768px) {
+      /* Center questions on the vertical axis */
+      .step {
+          align-items: center;
+          justify-content: flex-start; /* Allows natural flow if content overflows */
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch; /* Native mobile webview scroll physics */
+          /* Removed buggy 100dvh; relying on absolute top/bottom stretching from base class */
+          padding-top: calc(60px + env(safe-area-inset-top)); /* Mandatory restricted top area + notch safe zone */
+      }
+      
+      .step-content {
+          padding: 24px 20px;
+          margin: auto 0; /* Ensures it stays vertically centered but scrolls safely */
+          padding-bottom: calc(100px + env(safe-area-inset-bottom)); /* Prevents nav pill from hiding content */
+          flex-shrink: 0;
+      }
+
+      /* Stack question number and text */
+      .question-header {
+          flex-direction: column;
+          align-items: flex-start;
+      }
+      
+      .question-number {
+          margin-bottom: 12px;
+          margin-right: 0;
+          
+          /* MOBILE SPECIFIC SETTINGS - TWEAK THESE FOR MOBILE INDEPENDENTLY */
+          min-width: 18px; 
+          height: 20px; 
+          border-radius: 7px 4px 7px 4px; /* Corner roundness (Top-Left, Top-Right, Bottom-Right, Bottom-Left) */
+          font-size: 11px; 
+          padding: 0 2px;
+      }
+
+      /* Make OK buttons stretch across mobile screen */
+      .button-wrapper {
+          width: 100%;
+          flex-direction: column;
+          align-items: stretch;
+      }
+      .btn-submit {
+          width: 100%;
+          text-align: center;
+          display: flex;
+          justify-content: center;
+      }
+      .hint {
+          display: none; /* Hides 'press Enter' text on mobile completely */
+      }
+
+      /* Snap all elements to the left edge of the centered imaginary container safely */
+          .description, 
+          .input-wrapper, 
+          .button-wrapper, 
+          .choice-container, 
+          .statement-list, 
+          .custom-dropdown-container,
+          .input-label {
+              margin-left: 0 !important; /* !important forces the override of inline sub-question styles */
+              width: 100%;
+              max-width: 100%; /* Safety guard against screen overflow */
+              box-sizing: border-box; /* Forces padding/borders inward */
+              word-wrap: break-word; /* Breaks long text so it doesn't push off screen */
+          }
+
+          /* Perfect 6-5 staggered pyramid layout for Q5 scale on mobile (Dynamic Viewport Size) */
+          .scale-container {
+              margin-left: 0;
+              width: 100%;
+              justify-content: center; 
+              gap: 5px; /* Fixed safe gap to prevent mathematical overflowing */
+          }
+          .scale-label {
+              /* Mathematically guarantees 6 circles always fit: (100% container width - 5 gaps * 5px) / 6 */
+              width: calc((100% - 25px) / 6); 
+              height: auto; 
+              aspect-ratio: 1; /* Forces the height to exactly match the dynamically calculated width */
+              max-width: 50px; 
+              max-height: 50px;
+              font-size: clamp(12px, 3.5vw, 18px); /* Safe font scaling for smaller circles */
+          }
+          .mobile-break {
+              display: block;
+              flex-basis: 100%;
+              height: 0;
+              margin: 0;
+          }
+
+          /* Shrink nav pill slightly for mobile */
+          .nav-pill {
+              bottom: calc(20px + env(safe-area-inset-bottom));
+              right: 20px;
+              transform: scale(0.9);
+              transform-origin: bottom right;
+          }
+          
+          /* Mobile Calendar & Time Slot Adjustments */
+          #step-9 {
+              overflow: hidden; /* Fixed on screen, prevents the whole view from scrolling up */
+          }
+          #step-9 .step-content {
+              margin-top: -2vh; /* Moves the entire card slightly up vertically */
+              margin-bottom: 0; 
+              padding-bottom: 0;
+              flex: 1; /* Forces the content to fill the remaining screen space */
+              min-height: 0; /* CRITICAL: Allows inner elements to shrink and not push off-screen */
+              display: flex;
+              flex-direction: column;
+          }
+          
+          #step-9 .step-content > div {
+              flex: 1;
+              min-height: 0;
+              justify-content: flex-start !important; /* CRITICAL: Pins the calendar permanently to the top, removing the jump jitter */
+          }
+          
+          #step-9 .step-content .gap-4 {
+              flex: 1;
+              min-height: 0;
+              justify-content: flex-start !important; /* CRITICAL: Locks the inner wrapper to the top so it never jitters upwards */
+          }
+      
+      #timeSlotsContainer.open {
+          width: 100%; 
+          max-width: 100%;
+          flex: 1; /* Dynamically takes exactly the remaining screen height, no more, no less */
+          min-height: 0; /* Ensures it never pushes below the screen border */
+          height: auto;
+          margin-left: 0;
+          margin-top: 1rem;
+          overflow-y: hidden !important; /* Locks the header in place so it cannot scroll away */
+          padding-right: 0px; 
+          padding-bottom: 0px; /* Padding moved to the inner scroll list */
+      }
+      
+      #timeSlotsList {
+          flex: 1; /* Takes all remaining space below the fixed header */
+          min-height: 0;
+          height: auto !important; 
+          overflow-y: auto !important; /* Restores scrolling strictly to the time slots only */
+          padding-right: 4px; 
+          padding-bottom: 90px; /* Extra space at the bottom so the last slot clears the navigation pill */
+      }
+
+      .time-slot-btn {
+          padding: 10px;
+      }
+  }
+</style>
+</head>
+<body>
+
+<form id="main-form" action="/your-backend-api" method="POST">
+  <div id="form-container">
+
+    <div class="step active" id="step-9">
+      <div class="step-content" style="max-width: 900px; width: 100%; padding-top: 0; padding-bottom: 0; margin-top: 0vh; margin-bottom: auto;">
+        <div class="flex flex-col items-center justify-start w-full">
+          <img src="https://res.cloudinary.com/dobnqmfsg/image/upload/q_auto/f_auto/v1776510599/Untitled_design__3_-removebg-preview_xoxdtc.png" alt="Logo" class="w-16 mb-2 -mt-4">
+          <h2 class="text-2xl md:text-3xl font-light text-[var(--accent-color)] mb-5 tracking-wide">Reschedule</h2>
+          <div class="flex flex-col md:flex-row items-start justify-start md:justify-center w-full gap-4">
+            
+            <div class="w-full max-w-[380px] bg-white p-4 rounded-2xl border border-[rgba(3,35,48,0.1)] shadow-2xl">
+                <div class="mb-3 flex justify-between items-center relative z-[5000]">
+                    <h1 class="text-base font-bold capitalize tracking-wide text-[var(--accent-color)]">Select Date</h1>
+                    <div class="relative w-48">
+                        <div id="tz-dropdown-btn" onclick="toggleTzDropdown()" class="bg-[rgba(3,35,48,0.03)] border border-[rgba(3,35,48,0.1)] rounded-full px-4 py-2 flex items-center justify-between cursor-pointer w-full group hover:border-[rgba(3,35,48,0.3)] transition-all">
+                            <div class="flex items-center space-x-2 overflow-hidden w-full">
+                                <i data-lucide="globe" class="w-3.5 h-3.5 text-[var(--accent-color)] shrink-0"></i>
+                                <span id="tz-selected-text" class="text-[10px] text-[var(--accent-color)] font-light tracking-wide truncate pointer-events-none w-full text-left">Loading...</span>
+                            </div>
+                            <i data-lucide="chevron-down" id="tz-chevron" class="w-3 h-3 text-[var(--accent-color)] ml-2 shrink-0 transition-transform duration-200 pointer-events-none"></i>
+                        </div>
+                        <div id="tz-dropdown-menu" class="hidden absolute top-full right-0 mt-2 w-64 bg-white border border-[rgba(3,35,48,0.1)] rounded-2xl shadow-2xl z-[6000] flex flex-col overflow-hidden">
+                            <div class="p-2 border-b border-[rgba(3,35,48,0.1)]">
+                                <input type="text" id="tz-search" oninput="filterTimezones()" placeholder="Search city or timezone..." class="w-full bg-[rgba(3,35,48,0.03)] border border-[rgba(3,35,48,0.1)] rounded-xl px-3 py-2 text-[10px] text-[var(--accent-color)] font-light focus:outline-none focus:border-[var(--accent-color)] transition-colors">
+                            </div>
+                            <div id="tz-list" class="max-h-64 overflow-y-auto custom-scrollbar flex flex-col p-1 bg-white"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-[rgba(3,35,48,0.02)] border border-[rgba(3,35,48,0.1)] rounded-xl p-4">
+                    <div class="flex justify-between items-center mb-4">
+                        <button type="button" onclick="changeBookingMonth(-1)" class="p-1 hover:bg-[rgba(3,35,48,0.08)] rounded text-[var(--accent-color)] transition-colors"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+                        <h4 id="b-calendar-month-label" class="text-xs font-bold uppercase tracking-widest text-center text-[var(--accent-color)]">Month Year</h4>
+                        <button type="button" onclick="changeBookingMonth(1)" class="p-1 hover:bg-[rgba(3,35,48,0.08)] rounded text-[var(--accent-color)] transition-colors"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+                    </div>
+                    <div class="booking-calendar-grid text-[10px] text-[rgba(3,35,48,0.5)] uppercase font-bold mb-2 text-center">
+                        <div>S</div><div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div>
+                    </div>
+                    <div id="b-calendar-days" class="booking-calendar-grid text-[var(--accent-color)]"></div>
+                </div>
+            </div>
+
+            <div id="timeSlotsContainer" class="w-full flex flex-col relative md:pt-0">
+                <div class="flex justify-between items-center mb-3 h-[40px]">
+                    <div>
+                        <h3 id="selectedDateLabel" class="text-lg font-light text-[var(--accent-color)]">Select a date</h3>
+                        <p class="text-[rgba(3,35,48,0.6)] text-[9px] tracking-widest uppercase mt-0.5">Select an available slot</p>
+                    </div>
+                    <div id="bookNowBtnContainer" class="hidden">
+                        <button type="button" onclick="confirmBooking()" class="btn-submit flex justify-center items-center" style="padding: 6px 12px; font-size: 13px; min-width: 110px;">Book Now →</button>
+                    </div>
+                </div>
+                <div class="space-y-2 h-[340px] overflow-y-auto pr-2 custom-scrollbar" id="timeSlotsList">
+                </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" id="step-10">
+      <div class="step-content text-center flex flex-col items-center">
+        <img src="https://res.cloudinary.com/dobnqmfsg/image/upload/q_auto/f_auto/v1776510599/Untitled_design__3_-removebg-preview_xoxdtc.png" alt="Success Logo" class="w-24 mb-6 drop-shadow-sm">
+        <h1 class="text-4xl font-light mb-4 text-[var(--accent-color)]">You're all set!</h1>
+        <p class="text-[rgba(3,35,48,0.6)] max-w-md mx-auto leading-relaxed text-lg">We've sent a confirmation email with the meeting details. We are excited to help you scale.</p>
+      </div>
+    </div>
+
+  </div>
+</form>
+
+<script>
+  // --- ENVIRONMENT DETECTION & ROUTING ENGINE ---
+  function detectEnvironment() {
+      const ua = navigator.userAgent || navigator.vendor || window.opera;
+      const uaLower = ua.toLowerCase();
+      const body = document.body;
+
+      // 1. THE CHROME ENFORCER (Android Only)
+      const isAndroid = /android/i.test(uaLower);
+      // Determine if it's "True Chrome" (Must have 'chrome', but NOT be Samsung, Edge, Opera, Brave, etc.)
+      const isTrueChrome = /chrome/i.test(uaLower) && !/samsungbrowser|edg|opr|brave/i.test(uaLower);
+
+      if (isAndroid && !isTrueChrome) {
+          // Grab the exact current URL dynamically (without the https:// prefix)
+          const currentHostPath = window.location.host + window.location.pathname + window.location.search;
+          const intentUrl = "intent://" + currentHostPath + "#Intent;scheme=https;package=com.android.chrome;end;";
+
+          // Attempt to force-open Chrome via Intent
+          window.location.href = intentUrl;
+
+          // If intent fails or is blocked by an app (like Instagram), render a clean fallback UI after 1.5s
+          setTimeout(() => {
+              document.body.innerHTML = `
+                  <div style="height: 100dvh; width: 100vw; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; background-color: var(--bg-color); color: var(--accent-color); font-family: var(--font-family); box-sizing: border-box;">
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 20px;"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle><line x1="21.17" y1="8" x2="12" y2="8"></line><line x1="3.95" y1="6.06" x2="8.54" y2="14"></line><line x1="10.88" y1="21.94" x2="15.46" y2="14"></line></svg>
+                      <h2 style="font-size: 24px; margin-bottom: 10px; font-weight: bold;">Chrome Recommended</h2>
+                      <p style="font-size: 16px; margin-bottom: 30px; opacity: 0.8; max-width: 300px;">To ensure the best experience and prevent glitches, please open this page securely in Google Chrome.</p>
+                      <a href="${intentUrl}" style="background-color: var(--accent-color); color: #fff; padding: 14px 28px; border-radius: 12px; text-decoration: none; font-weight: bold; font-size: 16px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">Open in Chrome</a>
+                      <p style="font-size: 13px; opacity: 0.6; line-height: 1.5; margin-bottom: 10px;">If the button doesn't work, tap the <strong>three dots</strong> in the corner and select <strong>"Open in external browser"</strong>.</p>
+                      <p style="font-size: 12px; opacity: 0.4;"><br><a href="https://play.google.com/store/apps/details?id=com.android.chrome" style="color: var(--accent-color); text-decoration: underline;">Install from Play Store</a></p>
+                  </div>
+              `;
+          }, 1500);
+
+          return; // HALT execution of the rest of the form to prevent buggy rendering
+      }
+
+      // 2. Standard Mobile Detection (Executes if iOS, Desktop, or True Android Chrome)
+      const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(uaLower);
+      if (isMobile) {
+          body.classList.add('is-mobile');
+      } else {
+          body.classList.add('is-desktop');
+      }
+
+      // 3. Fallback In-App Browser Detection (For iOS mostly)
+      const rules = [
+          'FBAV', 'FBAN', // Facebook
+          'Instagram',    // Instagram
+          'LinkedInApp',  // LinkedIn
+          'Twitter',      // X / Twitter
+          'Bytedance',    // TikTok
+          'Snapchat'      // Snapchat
+      ];
+      
+      const isInApp = rules.some(rule => ua.indexOf(rule) > -1);
+      
+      if (isInApp) {
+          body.classList.add('is-in-app-browser');
+          if (ua.indexOf('LinkedInApp') > -1) body.classList.add('is-linkedin');
+      }
+  }
+
+  // Run detection immediately
+  detectEnvironment();
+  
+  // Initialize calendar immediately since the form is removed
+  document.addEventListener('DOMContentLoaded', () => {
+    if(window.initTimezones) window.initTimezones();
+    if(window.initBookingCalendar) window.initBookingCalendar();
+    if(window.lucide) lucide.createIcons();
+  });
+
+  function goToSuccess() {
+    const step9 = document.getElementById('step-9');
+    const step10 = document.getElementById('step-10');
+    
+    step9.classList.remove('active');
+    step9.classList.add('exit-up');
+    
+    setTimeout(() => {
+      step10.classList.remove('exit-up', 'exit-down', 'reverse');
+      void step10.offsetWidth;
+      step10.classList.add('active');
+    }, 500);
+  }
+
+  // --- CONFIGURATION & SETUP ---
+  var SUPABASE_URL = 'https://ikeyqwtrqaqogecvxmiq.supabase.co'; 
+  var SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlrZXlxd3RycWFxb2dlY3Z4bWlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0OTE0NTYsImV4cCI6MjA4OTA2NzQ1Nn0.6Gp5Y8J2T8gzY44gmcYojP8z028T6OVKOzfNT_1cqi8'; 
+  var TARGET_PROFILE_ID = 'b64d723a-df63-4447-8ed5-212836ddd659';
+  var WEBHOOK_URL = 'https://n8n.podcutz.co.uk/webhook/Leadhascoem';
+  
+  var supabaseInstance = null;
+  try {
+      if (window.supabase) {
+          supabaseInstance = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+              auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+          });
+
+          // Attempt anonymous sign in to fulfill {authenticated} RLS policies for external queries
+          if (supabaseInstance.auth && supabaseInstance.auth.signInAnonymously) {
+              supabaseInstance.auth.signInAnonymously().catch(e => console.warn("Anon auth skip", e));
+          }
+
+          supabaseInstance.channel('public-booking-changes')
+              .on('postgres_changes', { event: '*', schema: 'public', table: 'availability' }, payload => {
+                  if (selectedDateStr) fetchAndRenderSlots(selectedDateStr);
+              })
+              .on('postgres_changes', { event: '*', schema: 'public', table: 'meeting_participants' }, payload => {
+                  if (selectedDateStr) fetchAndRenderSlots(selectedDateStr);
+              })
+              .subscribe();
+      }
+  } catch (e) { console.error("Supabase failed to initialize.", e); }
+
+  // --- GLOBAL VARIABLES ---
+  var globalTimezoneList = [];
+  var currentUserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  
+  // Dynamically set initial calendar view to the month of the first available date (24h buffer)
+  var _initialBufferDate = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  var currentBookingYear = _initialBufferDate.getFullYear();
+  var currentBookingMonth = _initialBufferDate.getMonth();
+  
+  var selectedDateStr = null;
+  var activeSelectedSlot = null;
+  var availableSlotsCache = [];
+
+  // --- 1. TIMEZONE LOGIC ---
+  window.initTimezones = function() {
+      try {
+          const timezones = Intl.supportedValuesOf('timeZone');
+          const now = new Date();
+          globalTimezoneList = timezones.map(tz => {
+              const parts = tz.split('/');
+              const city = parts[parts.length - 1].replace(/_/g, ' ');
+              const region = parts.length > 1 ? parts[0].replace(/_/g, ' ') : '';
+              let gmtOffset = '';
+              try {
+                  const tzString = now.toLocaleString('en-US', { timeZone: tz, timeZoneName: 'shortOffset' });
+                  const match = tzString.match(/(GMT[+-]?\d*(?::\d{2})?)/);
+                  if (match) gmtOffset = match[1];
+              } catch(e) {}
+              let label = `${city}`;
+              if (region && region !== city) label += `, ${region}`;
+              if (gmtOffset) label += ` (${gmtOffset})`;
+              return { val: tz, label: label, searchStr: label.toLowerCase() };
+          }).sort((a, b) => a.label.localeCompare(b.label));
+
+          renderTzDropdown();
+          updateTzSelectedText(currentUserTimezone);
+      } catch(e) { console.error('Timezone init error:', e); }
+  }
+
+  function renderTzDropdown(filterText) {
+      filterText = filterText || '';
+      const tzListEl = document.getElementById('tz-list');
+      if(!tzListEl) return;
+      const filtered = filterText ? globalTimezoneList.filter(t => t.searchStr.includes(filterText.toLowerCase())) : globalTimezoneList;
+      
+      tzListEl.innerHTML = filtered.map(tz => 
+          `<div onclick="selectTimezone('` + tz.val + `')" class="px-3 py-2.5 text-[10px] text-[var(--accent-color)] font-light hover:bg-[rgba(3,35,48,0.08)] rounded-lg cursor-pointer transition-colors ${tz.val === currentUserTimezone ? 'bg-[rgba(3,35,48,0.08)] font-bold' : ''}">${tz.label}</div>`
+      ).join('');
+  }
+
+  function filterTimezones() {
+      const text = document.getElementById('tz-search').value;
+      renderTzDropdown(text);
+  }
+
+  function toggleTzDropdown() {
+      const menu = document.getElementById('tz-dropdown-menu');
+      const chevron = document.getElementById('tz-chevron');
+      if(!menu) return;
+      const isHidden = menu.classList.contains('hidden');
+      if (isHidden) {
+          menu.classList.remove('hidden');
+          if(chevron) chevron.style.transform = 'rotate(-180deg)';
+          document.getElementById('tz-search').focus();
+      } else {
+          menu.classList.add('hidden');
+          if(chevron) chevron.style.transform = 'rotate(0deg)';
+          document.getElementById('tz-search').value = '';
+          renderTzDropdown(); 
+      }
+  }
+
+  document.addEventListener('click', function(e) {
+      const menu = document.getElementById('tz-dropdown-menu');
+      const btn = document.getElementById('tz-dropdown-btn');
+      if (menu && !menu.classList.contains('hidden') && !menu.contains(e.target) && btn && !btn.contains(e.target)) {
+          toggleTzDropdown();
+      }
+  });
+
+  function updateTzSelectedText(tzValue) {
+      const found = globalTimezoneList.find(t => t.val === tzValue);
+      const el = document.getElementById('tz-selected-text');
+      if(el && found) el.innerText = found.label;
+  }
+
+  function selectTimezone(newTz) {
+      toggleTzDropdown();
+      currentUserTimezone = newTz;
+      updateTzSelectedText(newTz);
+      if (selectedDateStr) {
+          fetchAndRenderSlots(selectedDateStr); 
+      }
+  }
+
+  // --- 2. CALENDAR LOGIC ---
+  function changeBookingMonth(dir) {
+      const now = new Date();
+      currentBookingMonth += dir;
+      if (currentBookingMonth > 11) { currentBookingMonth = 0; currentBookingYear++; }
+      if (currentBookingMonth < 0) { currentBookingMonth = 11; currentBookingYear--; }
+      
+      const minMonth = now.getMonth();
+      const minYear = now.getFullYear();
+      let maxMonth = minMonth + 1;
+      let maxYear = minYear;
+      if (maxMonth > 11) { maxMonth = 0; maxYear++; }
+
+      const isBeforeMin = currentBookingYear < minYear || (currentBookingYear === minYear && currentBookingMonth < minMonth);
+      const isAfterMax = currentBookingYear > maxYear || (currentBookingYear === maxYear && currentBookingMonth > maxMonth);
+
+      if (isBeforeMin) {
+          currentBookingYear = minYear; currentBookingMonth = minMonth;
+          return;
+      }
+      if (isAfterMax) {
+          currentBookingYear = maxYear; currentBookingMonth = maxMonth;
+          return;
+      }
+      window.initBookingCalendar();
+      if(window.lucide) lucide.createIcons();
+  }
+
+  window.initBookingCalendar = function() {
+      const grid = document.getElementById('b-calendar-days');
+      const monthLabel = document.getElementById('b-calendar-month-label');
+      if (!grid) return;
+      
+      const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      if(monthLabel) monthLabel.innerText = `${monthNames[currentBookingMonth]} ${currentBookingYear}`;
+      
+      grid.innerHTML = '';
+      const firstDay = new Date(currentBookingYear, currentBookingMonth, 1).getDay();
+      const daysInMonth = new Date(currentBookingYear, currentBookingMonth + 1, 0).getDate();
+      
+      for(let i=0; i<firstDay; i++) {
+          grid.innerHTML += `<div class="booking-day empty"></div>`;
+      }
+      
+      const now = new Date();
+      const bufferTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const bufferMidnight = new Date(bufferTime.getFullYear(), bufferTime.getMonth(), bufferTime.getDate());
+
+      for(let i=1; i<=daysInMonth; i++) {
+          const d = document.createElement('div');
+          const dateObj = new Date(currentBookingYear, currentBookingMonth, i);
+          const dayOfWeek = dateObj.getDay();
+
+          if (dateObj < bufferMidnight) {
+              d.className = "booking-day disabled opacity-20 cursor-not-allowed text-[var(--accent-color)]";
+              d.innerText = i;
+          } else {
+              d.className = "booking-day rounded-md hover:bg-[rgba(3,35,48,0.08)] text-[var(--accent-color)]";
+              d.innerText = i;
+              
+              const loopDateStr = `${currentBookingYear}-${String(currentBookingMonth + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+              if (selectedDateStr === loopDateStr) d.classList.add('selected');
+
+              d.onclick = (e) => {
+                  document.querySelectorAll('.booking-day').forEach(el => el.classList.remove('selected'));
+                  e.currentTarget.classList.add('selected');
+                  
+                  selectedDateStr = loopDateStr;
+                  const options = { month: 'long', day: 'numeric', year: 'numeric' };
+                  document.getElementById('selectedDateLabel').innerText = dateObj.toLocaleDateString('en-US', options);
+                  
+                  document.getElementById('timeSlotsContainer').classList.add('open');
+                  document.getElementById('bookNowBtnContainer').classList.add('hidden');
+                  activeSelectedSlot = null;
+                  
+                  fetchAndRenderSlots(selectedDateStr);
+              };
+          }
+          grid.appendChild(d);
+      }
+  }
+
+  // --- 3. FETCH AND RENDER SLOTS ---
+  async function fetchAndRenderSlots(dateStr) {
+      const list = document.getElementById('timeSlotsList');
+      list.innerHTML = '<p class="text-[10px] text-[rgba(3,35,48,0.5)] uppercase col-span-full text-center py-4">Checking availability...</p>';
+      
+      try {
+          if (!supabaseInstance) throw new Error("Supabase is not connected. Make sure you entered valid URLs.");
+          const [year, month, day] = dateStr.split('-').map(Number);
+          const dateObj = new Date(year, month - 1, day);
+          const dayOfWeekNum = dateObj.getDay(); 
+          
+          const baseDateUTC = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+          const minUTC = new Date(baseDateUTC.getTime() - 24 * 60 * 60 * 1000).toISOString();
+          const maxUTC = new Date(baseDateUTC.getTime() + 48 * 60 * 60 * 1000).toISOString();
+
+          // Securely call the RPC function to bypass RLS and fetch only necessary scheduling data
+          const { data: rpcData, error: rpcErr } = await supabaseInstance.rpc('get_public_booking_data', {
+              p_target_profile_id: TARGET_PROFILE_ID,
+              p_start_utc: minUTC,
+              p_end_utc: maxUTC
+          });
+
+          if (rpcErr) throw rpcErr;
+
+          const hostTz = rpcData.timezone;
+          const allMeetings = rpcData.busy_slots || [];
+          const dayAvailability = (rpcData.availability || []).filter(a => a.day_of_week === dayOfWeekNum);
+          
+          if (!dayAvailability || dayAvailability.length === 0) {
+              availableSlotsCache = [];
+              renderTimeSlots();
+              return;
+          }
+
+          let baseRule = dayAvailability[0];
+          const [sh, sm] = baseRule.start_time_local.split(':').map(Number);
+          const [eh, em] = baseRule.end_time_local.split(':').map(Number);
+          const startMins = sh * 60 + sm;
+          const endMins = eh * 60 + em;
+          const now = new Date();
+          const bufferTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+          const ms = 1000 * 60 * 30; 
+          const roundedBufferTime = new Date(Math.ceil(bufferTime.getTime() / ms) * ms);
+
+          availableSlotsCache = [];
+          for (let i = 0; i < 144; i++) {
+              const slotStartUTC = new Date(new Date(minUTC).getTime() + i * 30 * 60000);
+              const slotEndUTC = new Date(slotStartUTC.getTime() + 30 * 60000);
+
+              if (slotStartUTC < roundedBufferTime) continue; 
+              const viewerDateCheck = new Intl.DateTimeFormat('en-CA', {
+                  timeZone: currentUserTimezone, year: 'numeric', month: '2-digit', day: '2-digit'
+              }).format(slotStartUTC);
+
+              if (viewerDateCheck !== dateStr) continue;
+              const hasCollision = allMeetings.some(m => {
+                  const mStart = new Date(m.start_time_utc);
+                  const mEnd = new Date(m.end_time_utc);
+                  return (slotStartUTC < mEnd && slotEndUTC > mStart);
+              });
+
+              if (hasCollision) continue;
+              
+              // FIX: Use the host's timezone to correctly interpret their local availability rules
+              const hostFormat = new Intl.DateTimeFormat('en-US', {
+                  timeZone: hostTz, hour: '2-digit', minute: '2-digit', hour12: false
+              }).formatToParts(new Date(slotStartUTC.getTime() + 15 * 60000));
+              
+              let hostHour = hostFormat.find(pt => pt.type === 'hour').value;
+              const hostMin = hostFormat.find(pt => pt.type === 'minute').value;
+              if (hostHour === '24') hostHour = '00';
+              const slotMins = parseInt(hostHour) * 60 + parseInt(hostMin);
+              let isAvailable = false;
+              if (startMins <= endMins) {
+                  if (slotMins >= startMins && slotMins < endMins) isAvailable = true;
+              } else { 
+                  if (slotMins >= startMins || slotMins < endMins) isAvailable = true;
+              }
+
+              if (isAvailable) {
+                  const labelFormatter = new Intl.DateTimeFormat('en-US', { timeZone: currentUserTimezone, hour: 'numeric', minute: '2-digit' });
+                  availableSlotsCache.push({
+                      label: `${labelFormatter.format(slotStartUTC)} - ${labelFormatter.format(slotEndUTC)}`,
+                      startUTC: slotStartUTC.toISOString(),
+                      endUTC: slotEndUTC.toISOString()
+                  });
+              }
+          }
+          renderTimeSlots();
+      } catch (error) {
+          console.error("Error fetching slots:", error);
+          list.innerHTML = `<p class="text-[10px] text-red-500 uppercase col-span-full text-center py-4">Failed to load schedule.</p>`;
+      }
+  }
+
+  function renderTimeSlots() {
+      const list = document.getElementById('timeSlotsList');
+      list.innerHTML = '';
+      
+      if (availableSlotsCache.length === 0) {
+          list.innerHTML = '<p class="text-[10px] text-[rgba(3,35,48,0.5)] uppercase col-span-full text-center py-4 tracking-widest">No mutual slots found</p>';
+          return;
+      }
+
+      availableSlotsCache.forEach(slot => {
+          let tzAbbr = '';
+          try {
+              const tzString = new Date(slot.startUTC).toLocaleString('en-US', { timeZone: currentUserTimezone, timeZoneName: 'short' });
+              tzAbbr = tzString.split(' ').pop();
+          } catch(e) {}
+
+          const slotBtn = document.createElement('button');
+          slotBtn.type = "button";
+          slotBtn.className = "time-slot-btn w-full text-left p-2 mb-2 bg-[rgba(3,35,48,0.03)] hover:bg-[rgba(3,35,48,0.08)] border border-[rgba(3,35,48,0.1)] rounded-xl transition-all flex justify-between items-center group text-[var(--accent-color)]";
+          slotBtn.innerHTML = `
+              <span class="text-sm font-bold tracking-tight">${slot.label} ${tzAbbr}</span>
+              <i data-lucide="check-circle-2" class="w-5 h-5 opacity-0 transition-all check-icon"></i>
+          `;
+          
+          slotBtn.onclick = (e) => {
+              document.querySelectorAll('.time-slot-btn').forEach(b => {
+                  b.classList.remove('bg-[var(--accent-color)]', 'text-white', 'shadow-md');
+                  b.classList.add('bg-[rgba(3,35,48,0.03)]', 'text-[var(--accent-color)]', 'hover:bg-[rgba(3,35,48,0.08)]');
+                  b.querySelector('.check-icon').classList.replace('opacity-100', 'opacity-0');
+              });
+              
+              slotBtn.classList.remove('bg-[rgba(3,35,48,0.03)]', 'text-[var(--accent-color)]', 'hover:bg-[rgba(3,35,48,0.08)]');
+              slotBtn.classList.add('bg-[var(--accent-color)]', 'text-white', 'shadow-md');
+              slotBtn.querySelector('.check-icon').classList.replace('opacity-0', 'opacity-100');
+              
+              activeSelectedSlot = {
+                  timeUtc: slot.startUTC,
+                  endUtc: slot.endUTC,
+                  timeLocal: slot.label,
+                  timezone: currentUserTimezone
+              };
+              document.getElementById('bookNowBtnContainer').classList.remove('hidden');
+          };
+          list.appendChild(slotBtn);
+      });
+      if(window.lucide) lucide.createIcons();
+  }
+
+  // --- 4. BOOKING, DB WRITE & WEBHOOK ---
+  async function confirmBooking() {
+      if (!activeSelectedSlot) return;
+
+      const btn = document.querySelector('#bookNowBtnContainer button');
+      const originalContent = btn.innerHTML;
+      btn.innerHTML = `<svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
+      btn.classList.add('opacity-75', 'pointer-events-none');
+
+      try {
+          if (!supabaseInstance) throw new Error("Supabase is not configured. Check the URL/Key.");
+
+          // 1. Double check for overlaps securely using the new RPC
+          const { data: rpcData, error: rpcErr } = await supabaseInstance.rpc('get_public_booking_data', {
+              p_target_profile_id: TARGET_PROFILE_ID,
+              p_start_utc: activeSelectedSlot.timeUtc,
+              p_end_utc: activeSelectedSlot.endUtc
+          });
+
+          if (rpcErr) throw rpcErr;
+
+          // Check if any returned busy slot overlaps with our selected slot
+          const conflictCheck = (rpcData.busy_slots || []).filter(m => {
+              const mStart = new Date(m.start_time_utc);
+              const mEnd = new Date(m.end_time_utc);
+              const sStart = new Date(activeSelectedSlot.timeUtc);
+              const sEnd = new Date(activeSelectedSlot.endUtc);
+              return (sStart < mEnd && sEnd > mStart);
+          });
+
+          if (conflictCheck.length > 0) {
+              alert("Sorry! This time slot is no longer available. Please select another time.");
+              fetchAndRenderSlots(selectedDateStr); 
+              btn.innerHTML = originalContent;
+              btn.classList.remove('opacity-75', 'pointer-events-none');
+              return;
+          }
+
+          
+          // 2. RLS strictly prevents external leads from inserting into `meetings` (auth.uid() = host_id).
+          // We MUST delegate the actual database insertion to the n8n webhook.
+          
+          // Gather ALL answers from the form dynamically
+          const formElement = document.getElementById('main-form');
+          const formData = new FormData(formElement);
+          const allFormAnswers = Object.fromEntries(formData.entries());
+          
+          // Combine first name and last name into a single "Name" entry
+          const firstName = allFormAnswers.first_name || '';
+          const lastName = allFormAnswers.last_name || '';
+          allFormAnswers.Name = `${firstName} ${lastName}`.trim();
+          
+          // Remove the separated name fields so only the combined "Name" goes to the webhook
+          delete allFormAnswers.first_name;
+          delete allFormAnswers.last_name;
+          
+          const emailInput = allFormAnswers.email || 'Unknown User';
+          
+          const [y, m, d] = selectedDateStr.split('-').map(Number);
+          const suffix = (d > 3 && d < 21) || d % 10 > 3 ? 'th' : ['th', 'st', 'nd', 'rd'][d % 10];
+          const monthNames = ["Jan", "Feb", "March", "April", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec"];
+          const formattedDate = `${d}${suffix} ${monthNames[m - 1]}, ${y}`;
+
+          // Create a temporary ID to fulfill the webhook requirement
+          const temporaryMeetingId = crypto.randomUUID ? crypto.randomUUID() : 'pending-backend-id';
+
+          const payload = {
+              target_profile_id: TARGET_PROFILE_ID,
+              meeting_id: temporaryMeetingId,
+              guest_email: emailInput,
+              form_data: allFormAnswers, // Injects the full questionnaire data (with combined Name) into n8n
+              booking_details: {
+                  date_selected: formattedDate,
+                  starttime: activeSelectedSlot.timeUtc,
+                  endtime: activeSelectedSlot.endUtc,
+                  user_timezone: activeSelectedSlot.timezone,
+                  time_local: activeSelectedSlot.timeLocal
+              }
+          };
+
+          const webhookResponse = await fetch(WEBHOOK_URL, {
+              method: 'POST',
+              headers: { 
+                  'Accept': 'application/json',
+                  'Content-Type': 'application/json' 
+              },
+              body: JSON.stringify(payload)
+          });
+
+          // Slide to Step 10 (Success Message)
+          goToSuccess();
+
+      } catch (error) {
+          console.error("Booking Error:", error);
+          alert("There was an issue scheduling your session. " + (error.message || "Please try again."));
+          btn.innerHTML = originalContent;
+          btn.classList.remove('opacity-75', 'pointer-events-none');
+      }
+  }
+</script>
+
+</body>
+</html>
