@@ -828,6 +828,14 @@
 </head>
 <body>
 
+<!-- Setup Loading & Error Overlays -->
+<div id="loading-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #ffffff; z-index: 9999; display: flex; align-items: center; justify-content: center; transition: opacity 0.5s ease;">
+    <svg class="animate-spin h-10 w-10 text-[var(--accent-color)]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+</div>
+<div id="error-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #ffffff; z-index: 10000; display: none; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.5s ease;">
+    <p style="font-size: 14px; color: #000000; text-align: center;">This link has been expired.</p>
+</div>
+
 <form id="main-form" action="/your-backend-api" method="POST">
   <div id="form-container">
 
@@ -966,23 +974,70 @@
   // Run detection immediately
   detectEnvironment();
 
-  // --- URL VALIDATION (RESCHEDULE ID) ---
+  // --- URL VALIDATION (RESCHEDULE ID & TOKEN) ---
   const urlParams = new URLSearchParams(window.location.search);
   const rescheduleId = urlParams.get('id');
+  const validateToken = urlParams.get('token');
 
-  if (!rescheduleId) {
+  if (!rescheduleId || !validateToken) {
       // Wipe the screen and make it pitch black immediately
       document.body.innerHTML = '';
       document.body.style.backgroundColor = '#000000';
-      // Halt all further script execution (prevents Supabase and Calendar from loading)
-      throw new Error("Missing reschedule ID in URL.");
+      // Halt all further script execution
+      throw new Error("Missing reschedule ID or Token in URL.");
+  }
+
+  // --- TOKEN VALIDATION LOGIC ---
+  async function checkTokenValidity() {
+      try {
+          // Sending Token securely as POST JSON body
+          const response = await fetch('https://n8n.podcutz.co.uk/webhook/tokenvalidcheckx', {
+              method: 'POST',
+              headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: validateToken, id: rescheduleId })
+          });
+          
+          const rawResponse = await response.text();
+          const textResponse = rawResponse.toLowerCase().trim();
+          
+          // Confirms valid regardless if n8n returns raw string 'valid' or json {"response":"valid"}
+          if (textResponse === 'valid' || textResponse.includes('"valid"') || textResponse.includes('valid')) {
+              if (!textResponse.includes('invalid')) {
+                  return true;
+              }
+          }
+          return false;
+      } catch (error) {
+          console.error("Token validation failed:", error);
+          return false;
+      }
   }
   
-  // Initialize calendar immediately since the form is removed
-  document.addEventListener('DOMContentLoaded', () => {
-    if(window.initTimezones) window.initTimezones();
-    if(window.initBookingCalendar) window.initBookingCalendar();
-    if(window.lucide) lucide.createIcons();
+  // Initialize calendar dynamically based on Validation
+  document.addEventListener('DOMContentLoaded', async () => {
+      const loadingOverlay = document.getElementById('loading-overlay');
+      const errorOverlay = document.getElementById('error-overlay');
+      const errorText = errorOverlay.querySelector('p');
+
+      const isValid = await checkTokenValidity();
+
+      if (isValid) {
+          // Fade out loading screen smoothly
+          loadingOverlay.style.opacity = '0';
+          setTimeout(() => { loadingOverlay.style.display = 'none'; }, 500);
+
+          // Link is valid, Initialize everything normally
+          if(window.initTimezones) window.initTimezones();
+          if(window.initBookingCalendar) window.initBookingCalendar();
+          if(window.lucide) lucide.createIcons();
+      } else {
+          // Link is invalid, show white screen with text
+          loadingOverlay.style.display = 'none';
+          errorOverlay.style.display = 'flex';
+          void errorOverlay.offsetWidth; // Force CSS reflow for fade-in transition
+          errorText.innerText = "This link has been expired.";
+          errorOverlay.style.opacity = '1';
+      }
   });
 
   function goToSuccess() {
@@ -1358,6 +1413,23 @@
       btn.classList.add('opacity-75', 'pointer-events-none');
 
       try {
+          // --- SECOND TOKEN VALIDATION CHECK (ON BOOK NOW) ---
+          const isStillValid = await checkTokenValidity();
+          if (!isStillValid) {
+              const errorOverlay = document.getElementById('error-overlay');
+              const errorText = errorOverlay.querySelector('p');
+              
+              errorOverlay.style.display = 'flex';
+              void errorOverlay.offsetWidth; // Trigger reflow to initiate smooth fade
+              errorText.innerText = "This Reschedule link has been expired.";
+              errorOverlay.style.opacity = '1';
+              
+              // Reset the button behind the overlay, just to keep code clean
+              btn.innerHTML = originalContent;
+              btn.classList.remove('opacity-75', 'pointer-events-none');
+              return; // Halt the entire Supabase / N8N process here
+          }
+
           if (!supabaseInstance) throw new Error("Supabase is not configured. Check the URL/Key.");
 
           // 1. Double check for overlaps securely using the new RPC
