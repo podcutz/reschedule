@@ -1058,6 +1058,7 @@
   var SUPABASE_URL = 'https://ikeyqwtrqaqogecvxmiq.supabase.co'; 
   var SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlrZXlxd3RycWFxb2dlY3Z4bWlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0OTE0NTYsImV4cCI6MjA4OTA2NzQ1Nn0.6Gp5Y8J2T8gzY44gmcYojP8z028T6OVKOzfNT_1cqi8'; 
   var TARGET_PROFILE_ID = 'b64d723a-df63-4447-8ed5-212836ddd659';
+  var TARGET_PROFILE_ID_2 = '69d8796d-b777-4907-b98c-d8941db9fbd4'; // Replace this string with the actual second profile ID
   var WEBHOOK_URL = 'https://n8n.podcutz.co.uk/webhook/Leadhascoem';
   
   var supabaseInstance = null;
@@ -1275,30 +1276,55 @@
           const minUTC = new Date(baseDateUTC.getTime() - 24 * 60 * 60 * 1000).toISOString();
           const maxUTC = new Date(baseDateUTC.getTime() + 48 * 60 * 60 * 1000).toISOString();
 
-          // Securely call the RPC function to bypass RLS and fetch only necessary scheduling data
-          const { data: rpcData, error: rpcErr } = await supabaseInstance.rpc('get_public_booking_data', {
-              p_target_profile_id: TARGET_PROFILE_ID,
-              p_start_utc: minUTC,
-              p_end_utc: maxUTC
-          });
+          // Securely call the RPC function to bypass RLS and fetch scheduling data for BOTH hosts concurrently
+          const [res1, res2] = await Promise.all([
+              supabaseInstance.rpc('get_public_booking_data', { p_target_profile_id: TARGET_PROFILE_ID, p_start_utc: minUTC, p_end_utc: maxUTC }),
+              supabaseInstance.rpc('get_public_booking_data', { p_target_profile_id: TARGET_PROFILE_ID_2, p_start_utc: minUTC, p_end_utc: maxUTC })
+          ]);
 
-          if (rpcErr) throw rpcErr;
+          if (res1.error) throw res1.error;
+          if (res2.error) throw res2.error;
 
-          const hostTz = rpcData.timezone;
-          const allMeetings = rpcData.busy_slots || [];
-          const dayAvailability = (rpcData.availability || []).filter(a => a.day_of_week === dayOfWeekNum);
+          const host1Data = res1.data;
+          const host2Data = res2.data;
+
+          const dayAvailability1 = (host1Data.availability || []).filter(a => a.day_of_week === dayOfWeekNum);
+          const dayAvailability2 = (host2Data.availability || []).filter(a => a.day_of_week === dayOfWeekNum);
           
-          if (!dayAvailability || dayAvailability.length === 0) {
+          // If either host is completely unavailable on this day, skip immediately
+          if (!dayAvailability1.length || !dayAvailability2.length) {
               availableSlotsCache = [];
               renderTimeSlots();
               return;
           }
 
-          let baseRule = dayAvailability[0];
-          const [sh, sm] = baseRule.start_time_local.split(':').map(Number);
-          const [eh, em] = baseRule.end_time_local.split(':').map(Number);
-          const startMins = sh * 60 + sm;
-          const endMins = eh * 60 + em;
+          // Helper to check if a UTC slot falls within a specific host's availability rule in their own timezone
+          const checkHostAvailability = (slotStartUTC, hostTz, availabilityRules) => {
+              const rule = availabilityRules[0]; // Assuming 1 rule per day as per current design
+              const [sh, sm] = rule.start_time_local.split(':').map(Number);
+              const [eh, em] = rule.end_time_local.split(':').map(Number);
+              const startMins = sh * 60 + sm;
+              const endMins = eh * 60 + em;
+
+              const hostFormat = new Intl.DateTimeFormat('en-US', {
+                  timeZone: hostTz, hour: '2-digit', minute: '2-digit', hour12: false
+              }).formatToParts(new Date(slotStartUTC.getTime() + 15 * 60000));
+              
+              let hostHour = hostFormat.find(pt => pt.type === 'hour').value;
+              const hostMin = hostFormat.find(pt => pt.type === 'minute').value;
+              if (hostHour === '24') hostHour = '00';
+              const slotMins = parseInt(hostHour) * 60 + parseInt(hostMin);
+              
+              if (startMins <= endMins) {
+                  return (slotMins >= startMins && slotMins < endMins);
+              } else { 
+                  return (slotMins >= startMins || slotMins < endMins);
+              }
+          };
+
+          // Combine meetings from both hosts to check for cross-collisions
+          const combinedMeetings = [...(host1Data.busy_slots || []), ...(host2Data.busy_slots || [])];
+
           const now = new Date();
           const bufferTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
           const ms = 1000 * 60 * 30; 
@@ -1315,7 +1341,9 @@
               }).format(slotStartUTC);
 
               if (viewerDateCheck !== dateStr) continue;
-              const hasCollision = allMeetings.some(m => {
+              
+              // Check if ANY meeting from EITHER host collides with this slot
+              const hasCollision = combinedMeetings.some(m => {
                   const mStart = new Date(m.start_time_utc);
                   const mEnd = new Date(m.end_time_utc);
                   return (slotStartUTC < mEnd && slotEndUTC > mStart);
@@ -1323,23 +1351,11 @@
 
               if (hasCollision) continue;
               
-              // FIX: Use the host's timezone to correctly interpret their local availability rules
-              const hostFormat = new Intl.DateTimeFormat('en-US', {
-                  timeZone: hostTz, hour: '2-digit', minute: '2-digit', hour12: false
-              }).formatToParts(new Date(slotStartUTC.getTime() + 15 * 60000));
-              
-              let hostHour = hostFormat.find(pt => pt.type === 'hour').value;
-              const hostMin = hostFormat.find(pt => pt.type === 'minute').value;
-              if (hostHour === '24') hostHour = '00';
-              const slotMins = parseInt(hostHour) * 60 + parseInt(hostMin);
-              let isAvailable = false;
-              if (startMins <= endMins) {
-                  if (slotMins >= startMins && slotMins < endMins) isAvailable = true;
-              } else { 
-                  if (slotMins >= startMins || slotMins < endMins) isAvailable = true;
-              }
+              // Check if BOTH hosts are actively working during this specific slot in their respective timezones
+              const host1Available = checkHostAvailability(slotStartUTC, host1Data.timezone, dayAvailability1);
+              const host2Available = checkHostAvailability(slotStartUTC, host2Data.timezone, dayAvailability2);
 
-              if (isAvailable) {
+              if (host1Available && host2Available) {
                   const labelFormatter = new Intl.DateTimeFormat('en-US', { timeZone: currentUserTimezone, hour: 'numeric', minute: '2-digit' });
                   availableSlotsCache.push({
                       label: `${labelFormatter.format(slotStartUTC)} - ${labelFormatter.format(slotEndUTC)}`,
@@ -1432,17 +1448,19 @@
 
           if (!supabaseInstance) throw new Error("Supabase is not configured. Check the URL/Key.");
 
-          // 1. Double check for overlaps securely using the new RPC
-          const { data: rpcData, error: rpcErr } = await supabaseInstance.rpc('get_public_booking_data', {
-              p_target_profile_id: TARGET_PROFILE_ID,
-              p_start_utc: activeSelectedSlot.timeUtc,
-              p_end_utc: activeSelectedSlot.endUtc
-          });
+          // 1. Double check for overlaps securely using the RPC for BOTH hosts right before final booking
+          const [res1, res2] = await Promise.all([
+              supabaseInstance.rpc('get_public_booking_data', { p_target_profile_id: TARGET_PROFILE_ID, p_start_utc: activeSelectedSlot.timeUtc, p_end_utc: activeSelectedSlot.endUtc }),
+              supabaseInstance.rpc('get_public_booking_data', { p_target_profile_id: TARGET_PROFILE_ID_2, p_start_utc: activeSelectedSlot.timeUtc, p_end_utc: activeSelectedSlot.endUtc })
+          ]);
 
-          if (rpcErr) throw rpcErr;
+          if (res1.error) throw res1.error;
+          if (res2.error) throw res2.error;
 
-          // Check if any returned busy slot overlaps with our selected slot
-          const conflictCheck = (rpcData.busy_slots || []).filter(m => {
+          const combinedBusySlots = [...(res1.data.busy_slots || []), ...(res2.data.busy_slots || [])];
+
+          // Check if any returned busy slot from either host overlaps with our selected slot
+          const conflictCheck = combinedBusySlots.filter(m => {
               const mStart = new Date(m.start_time_utc);
               const mEnd = new Date(m.end_time_utc);
               const sStart = new Date(activeSelectedSlot.timeUtc);
@@ -1486,6 +1504,7 @@
           // Pass the exact reschedule ID from the URL directly to your webhook
           const payload = {
               target_profile_id: TARGET_PROFILE_ID,
+              target_profile_id_2: TARGET_PROFILE_ID_2,
               meeting_id: rescheduleId, // Uses the dynamic ID parsed from the URL
               guest_email: emailInput,
               Type: "Reschedule",
