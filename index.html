@@ -1527,12 +1527,29 @@
               body: JSON.stringify(payload)
           });
 
+          // Verify response is intact and parses as valid JSON
+          if (!webhookResponse.ok) throw new Error("Invalid response");
+          await webhookResponse.json();
+
           // Slide to Step 10 (Success Message)
           goToSuccess();
 
       } catch (error) {
           console.error("Booking Error:", error);
-          alert("There was an issue scheduling your session. " + (error.message || "Please try again."));
+          
+          // Small line-like notification with white bg and black color
+          let toast = document.getElementById('custom-error-toast');
+          if (!toast) {
+              toast = document.createElement('div');
+              toast.id = 'custom-error-toast';
+              toast.style.cssText = 'position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background-color: #ffffff; color: #000000; padding: 12px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 13px; font-weight: 500; z-index: 10000; opacity: 0; transition: opacity 0.3s ease; text-align: center; width: max-content; max-width: 90%; pointer-events: none; border: 1px solid rgba(0,0,0,0.1);';
+              document.body.appendChild(toast);
+          }
+          toast.innerText = 'Please select any other time slot by selecting your desired date again.';
+          
+          requestAnimationFrame(() => { toast.style.opacity = '1'; });
+          setTimeout(() => { toast.style.opacity = '0'; }, 4000);
+
           btn.innerHTML = originalContent;
           btn.classList.remove('opacity-75', 'pointer-events-none');
       }
